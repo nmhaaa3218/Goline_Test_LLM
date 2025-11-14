@@ -1,6 +1,7 @@
 # Goline LLM - Financial Agent by Manh Ha Nguyen
 
 ## Folder Structure
+```
 .
 ├── app
 │   ├── __init__.py
@@ -21,6 +22,7 @@
 ├── LICENSE
 ├── README.md
 └── requirements.txt
+```
 
 ## Capability
 
