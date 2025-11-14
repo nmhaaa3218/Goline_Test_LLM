@@ -66,4 +66,4 @@ cp app/env.template app/.env
 ![Goline Financial LLM agent architecture](./assets/workflow_concept.png)
 
 ## Testing results
-Testing results can be found under `asset/test_results.csv`
+Testing results can be found under `assets/test_results.csv`
