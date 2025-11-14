@@ -4,7 +4,7 @@ import requests
 import time
 
 # Load data
-data = pd.read_csv('test_template.csv')
+data = pd.read_csv('assets/test_template.csv')
 
 # Load API
 api_url = 'http://localhost:8000/query'
@@ -34,4 +34,4 @@ for index, row in data.iterrows():
         time.sleep(5)
     
 # Save results to csv
-data.to_csv('test_results.csv', index=False)
+data.to_csv('assets/test_results.csv', index=False)

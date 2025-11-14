@@ -6,6 +6,17 @@ from vnstock import Company
 from vnstock import Quote
 import pandas_ta_classic as ta
 from langchain.tools import BaseTool
+from datetime import datetime
+from datetime import timezone, timedelta
+
+# Get today's date
+def get_today():
+    gmt_plus_7 = timezone(timedelta(hours=7))
+    return datetime.now(gmt_plus_7).strftime("%Y-%m-%d")
+
+def get_past_date(time_delta: int = 30):
+    gmt_plus_7 = timezone(timedelta(hours=7))
+    return (datetime.now(gmt_plus_7) - timedelta(days=time_delta)).strftime("%Y-%m-%d")
 
 #============Shareholders============
 class ViewShareholdersInput(BaseModel):
@@ -21,7 +32,7 @@ class ViewShareholdersTool(BaseTool):
     args_schema: Type[BaseModel] = ViewShareholdersInput
     return_direct: bool = False
     
-    def _run(self, symbols: List[str]) -> str:
+    def _run(self, symbols: List[str]) -> dict:
         """Execute the tool to get shareholders information."""
         results = {}
         
@@ -40,7 +51,7 @@ class ViewShareholdersTool(BaseTool):
         
         return results
     
-    async def _arun(self, symbols: List[str]) -> str:
+    async def _arun(self, symbols: List[str]) -> dict:
         """Async version of the tool."""
         return self._run(symbols)
 
@@ -62,7 +73,7 @@ class ViewManagementTool(BaseTool):
     args_schema: Type[BaseModel] = ViewManagementInput
     return_direct: bool = False
     
-    def _run(self, symbols: List[str]) -> str:
+    def _run(self, symbols: List[str]) -> dict:
         """Execute the tool to get management information."""
         results = {}
         
@@ -81,7 +92,7 @@ class ViewManagementTool(BaseTool):
         
         return results
     
-    async def _arun(self, symbols: List[str]) -> str:
+    async def _arun(self, symbols: List[str]) -> dict:
         """Async version of the tool."""
         return self._run(symbols)
 
@@ -103,7 +114,7 @@ class ViewSubsidiariesTool(BaseTool):
     args_schema: Type[BaseModel] = ViewSubsidiariesInput
     return_direct: bool = False
     
-    def _run(self, symbols: List[str]) -> str:
+    def _run(self, symbols: List[str]) -> dict:
         """Execute the tool to get subsidiaries information."""
         results = {}
         
@@ -122,7 +133,7 @@ class ViewSubsidiariesTool(BaseTool):
         
         return results
     
-    async def _arun(self, symbols: List[str]) -> str:
+    async def _arun(self, symbols: List[str]) -> dict:
         """Async version of the tool."""
         return self._run(symbols)
 
@@ -134,8 +145,8 @@ class ViewSubsidiariesTool(BaseTool):
 class ViewOHLCVInput(BaseModel):
     """Input for viewing OHLCV data of Vietnamese companies."""
     symbols: List[str] = Field(description="List of stock symbols of Vietnamese companies (e.g., ['VIC', 'VCB', 'FPT'])")
-    start: str = Field(description="Start date for OHLCV data in YYYY-mm-dd format", default="2024-01-01")
-    end: str = Field(description="End date for OHLCV data in YYYY-mm-dd format", default="2024-12-31")
+    start: str = Field(description="Start date for OHLCV data in YYYY-mm-dd format", default_factory=get_past_date)
+    end: str = Field(description="End date for OHLCV data in YYYY-mm-dd format", default_factory=get_today)
     interval: str = Field(description="Timeframe for OHLCV data. Available options: '1m' (1 minute), '5m' (5 minutes), '15m' (15 minutes), '30m' (30 minutes), '1H' (1 hour), '1D' (1 day), '1W' (1 week), '1M' (1 month)", default="1D")
     columns: Optional[List[str]] = Field(description="List of columns to return. Available options: ['time', 'open', 'high', 'low', 'close', 'volume']. If not specified, all columns will be returned.", default=None)
 
@@ -148,8 +159,15 @@ class ViewOHLCVTool(BaseTool):
     args_schema: Type[BaseModel] = ViewOHLCVInput
     return_direct: bool = False
     
-    def _run(self, symbols: List[str], start: str = "2024-01-01", end: str = "2024-12-31", interval: str = "1D", columns: Optional[list] = None) -> str:
+    def _run(self, symbols: List[str], start: Optional[str] = None, end: Optional[str] = None, interval: str = "1D", columns: Optional[list] = None) -> dict:
         """Execute the tool to get OHLCV data."""
+        if start is None:
+            start = get_past_date()  # Uses your 30-day default
+        if end is None:
+            end = get_today()
+        if interval is None:
+            interval = "1D"  # Your default interval
+            
         results = {}
         
         # Validate interval
@@ -166,7 +184,7 @@ class ViewOHLCVTool(BaseTool):
         
         for symbol in symbols:
             try:
-                quote = Quote(symbol=symbol, source='TCBS')
+                quote = Quote(symbol=symbol, source='VCI')
                 ohlcv_data = quote.history(start=start, end=end, interval=interval)
                 
                 if ohlcv_data is None or ohlcv_data.empty:
@@ -194,20 +212,20 @@ class ViewOHLCVTool(BaseTool):
         
         return results
     
-    async def _arun(self, symbols: List[str], start: str = "2025-10-01", end: str = "2025-11-13", interval: str = "1D", columns: Optional[list] = None) -> str:
+    async def _arun(self, symbols: List[str], start: Optional[str] = None, end: Optional[str] = None, interval: str = "1D", columns: Optional[list] = None) -> dict:
         """Async version of the tool."""
         return self._run(symbols, start, end, interval, columns)
 
 
-# result = ViewOHLCVTool().invoke({"symbols": ["VCB", "VIC"], "start": "2025-10-01", "end": "2025-11-13", "interval": "15m", "columns": ["open", "close", "volume"]})
+# result = ViewOHLCVTool().invoke({"symbols": ["TCB"], "start": "2025-11-04", "end": "2025-11-13", "interval": "1D", "columns": ["open", "close", "volume"]})
 # print(result)
 
 #============Volume Profile============
 class CalculateTotalVolumeInput(BaseModel):
     """Input schema for Calculate Total Volume tool."""
     symbols: List[str] = Field(description="List of stock symbols (e.g., ['VCB', 'VIC', 'FPT'])")
-    start: str = Field(default="2024-01-01", description="Ngày bắt đầu (YYYY-MM-DD)")
-    end: str = Field(default="2024-12-31", description="Ngày kết thúc (YYYY-MM-DD)")
+    start: str = Field(default_factory=get_past_date, description="Ngày bắt đầu (YYYY-MM-DD)")
+    end: str = Field(default_factory=get_today, description="Ngày kết thúc (YYYY-MM-DD)")
     interval: str = Field(default="1D", description="Khung thời gian (1m, 5m, 15m, 30m, 1H, 1D, 1W, 1M)")
 
 class CalculateTotalVolumeTool(BaseTool):
@@ -218,8 +236,15 @@ class CalculateTotalVolumeTool(BaseTool):
     args_schema: Type[BaseModel] = CalculateTotalVolumeInput
     return_direct: bool = False
     
-    def _run(self, symbols: List[str], start: str = "2024-01-01", end: str = "2024-12-31", interval: str = "1D") -> str:
+    def _run(self, symbols: List[str], start: Optional[str] = None, end: Optional[str] = None, interval: str = "1D") -> dict:
         """Execute the tool to calculate total volume."""
+        if start is None:
+            start = get_past_date()  # Uses your 30-day default
+        if end is None:
+            end = get_today()
+        if interval is None:
+            interval = "1D"  # Your default interval
+            
         results = {}
         
         # Validate interval
@@ -229,7 +254,7 @@ class CalculateTotalVolumeTool(BaseTool):
         
         for symbol in symbols:
             try:
-                quote = Quote(symbol=symbol, source='TCBS')
+                quote = Quote(symbol=symbol, source='VCI')
                 ohlcv_data = quote.history(start=start, end=end, interval=interval)
                 
                 if ohlcv_data is None or ohlcv_data.empty:
@@ -250,7 +275,7 @@ class CalculateTotalVolumeTool(BaseTool):
         
         return results
     
-    async def _arun(self, symbols: List[str], start: str = "2024-01-01", end: str = "2024-12-31", interval: str = "1D") -> str:
+    async def _arun(self, symbols: List[str], start: Optional[str] = None, end: Optional[str] = None, interval: str = "1D") -> dict:
         """Async version of the tool."""
         return self._run(symbols, start, end, interval)
 
@@ -262,8 +287,8 @@ class CalculateTotalVolumeTool(BaseTool):
 class CalculateSMAInput(BaseModel):
     """Input schema for Calculate SMA tool."""
     symbols: List[str] = Field(description="List of stock symbols (e.g., ['VCB', 'VIC', 'FPT'])")
-    start: str = Field(default="2024-01-01", description="Ngày bắt đầu (YYYY-MM-DD)")
-    end: str = Field(default="2024-12-31", description="Ngày kết thúc (YYYY-MM-DD)")
+    start: str = Field(default_factory=get_past_date, description="Ngày bắt đầu (YYYY-MM-DD)")
+    end: str = Field(default_factory=get_today, description="Ngày kết thúc (YYYY-MM-DD)")
     interval: str = Field(default="1D", description="Khung thời gian (1m, 5m, 15m, 30m, 1H, 1D, 1W, 1M)")
     period: List[int] = Field(default=[20], description="Chu kỳ tính SMA (ví dụ: 20 cho SMA 20 ngày hoặc [9, 20] cho SMA 9 và 20 ngày)")
 
@@ -275,8 +300,15 @@ class CalculateSMATool(BaseTool):
     args_schema: Type[BaseModel] = CalculateSMAInput
     return_direct: bool = False
    
-    def _run(self, symbols: List[str], start: str = "2024-01-01", end: str = "2024-12-31", interval: str = "1D", period: List[int] = [20]) -> str:
+    def _run(self, symbols: List[str], start: Optional[str] = None, end: Optional[str] = None, interval: str = "1D", period: List[int] = [20]) -> dict:
         """Execute the tool to calculate SMA."""
+        if start is None:
+            start = get_past_date()  # Uses your 30-day default
+        if end is None:
+            end = get_today()
+        if interval is None:
+            interval = "1D"  # Your default interval
+            
         results = {}
         
         # Validate interval
@@ -297,7 +329,7 @@ class CalculateSMATool(BaseTool):
         
         for symbol in symbols:
             try:
-                quote = Quote(symbol=symbol, source='TCBS')
+                quote = Quote(symbol=symbol, source='VCI')
                 ohlcv_data = quote.history(start=start, end=end, interval=interval)
                 
                 if ohlcv_data is None or ohlcv_data.empty:
@@ -322,7 +354,7 @@ class CalculateSMATool(BaseTool):
         
         return results
     
-    async def _arun(self, symbols: List[str], start: str = "2024-01-01", end: str = "2024-12-31", interval: str = "1D", period: List[int] = [20]) -> str:
+    async def _arun(self, symbols: List[str], start: Optional[str] = None, end: Optional[str] = None, interval: str = "1D", period: List[int] = [20]) -> dict:
         """Async version of the tool."""
         return self._run(symbols, start, end, interval, period)
 
@@ -333,8 +365,8 @@ class CalculateSMATool(BaseTool):
 class CalculateRSIInput(BaseModel):
     """Input schema for Calculate RSI tool."""
     symbols: List[str] = Field(description="List of stock symbols (e.g., ['VCB', 'VIC', 'FPT'])")
-    start: str = Field(default="2024-01-01", description="Ngày bắt đầu (YYYY-MM-DD)")
-    end: str = Field(default="2024-12-31", description="Ngày kết thúc (YYYY-MM-DD)")
+    start: str = Field(default_factory=get_past_date, description="Ngày bắt đầu (YYYY-MM-DD)")
+    end: str = Field(default_factory=get_today, description="Ngày kết thúc (YYYY-MM-DD)")
     interval: str = Field(default="1D", description="Khung thời gian (1m, 5m, 15m, 30m, 1H, 1D, 1W, 1M)")
     period: int = Field(default=14, description="Chu kỳ tính RSI (ví dụ: 14 cho RSI 14 ngày)")
 
@@ -346,8 +378,15 @@ class CalculateRSITool(BaseTool):
     args_schema: Type[BaseModel] = CalculateRSIInput
     return_direct: bool = False
     
-    def _run(self, symbols: List[str], start: str = "2024-01-01", end: str = "2024-12-31", interval: str = "1D", period: int = 14) -> str:
+    def _run(self, symbols: List[str], start: Optional[str] = None, end: Optional[str] = None, interval: str = "1D", period: int = 14) -> dict:
         """Execute the tool to calculate RSI."""
+        if start is None:
+            start = get_past_date()  # Uses your 30-day default
+        if end is None:
+            end = get_today()
+        if interval is None:
+            interval = "1D"  # Your default interval
+            
         results = {}
         
         # Validate interval
@@ -361,7 +400,7 @@ class CalculateRSITool(BaseTool):
         
         for symbol in symbols:
             try:
-                quote = Quote(symbol=symbol, source='TCBS')
+                quote = Quote(symbol=symbol, source='VCI')
                 ohlcv_data = quote.history(start=start, end=end, interval=interval)
                 
                 if ohlcv_data is None or ohlcv_data.empty:
@@ -386,7 +425,7 @@ class CalculateRSITool(BaseTool):
         
         return results
     
-    async def _arun(self, symbols: List[str], start: str = "2024-01-01", end: str = "2024-12-31", interval: str = "1D", period: int = 14) -> str:
+    async def _arun(self, symbols: List[str], start: Optional[str] = None, end: Optional[str] = None, interval: str = "1D", period: int = 14) -> dict:
         """Async version of the tool."""
         return self._run(symbols, start, end, interval, period)
 
