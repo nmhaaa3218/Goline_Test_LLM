@@ -1,30 +1,17 @@
-"""
-Chains for query classification, decomposition, and result combination.
-"""
+# =============Classifer chain=============
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.language_models.chat_models import BaseChatModel
-
+from langchain_core.language_models import BaseChatModel
 
 class QueryClassification(BaseModel):
-    """Model for query classification result."""
     is_complex: bool = Field(description="True nếu câu hỏi phức tạp, False nếu đơn giản")
     reasoning: str = Field(description="Lý do phân loại")
 
+class ComplexQuery(BaseModel):
+    query: str = Field(description="Câu hỏi phức tạp cần phân tích và trả lời")
 
-class QueryDecomposition(BaseModel):
-    """Model for query decomposition result."""
-    sub_queries: list[str] = Field(description="Danh sách các câu hỏi con được phân tách từ câu hỏi phức tạp")
-    reasoning: str = Field(description="Lý do phân tách câu hỏi")
-
-
-class CombinedResult(BaseModel):
-    """Model for combined result."""
-    combined_answer: str = Field(description="Câu trả lời tổng hợp từ nhiều kết quả con")
-    original_query: str = Field(description="Câu hỏi gốc")
-
-
+# Create classifier chain
 def create_classifier_chain(llm: BaseChatModel):
     """Tạo chain để phân loại câu hỏi."""
     
@@ -53,6 +40,10 @@ def create_classifier_chain(llm: BaseChatModel):
     
     return classifier_chain
 
+# =============Decompose complex query=============
+class QueryDecomposition(BaseModel):
+    sub_queries: list[str] = Field(description="Danh sách các câu hỏi con được phân tách từ câu hỏi phức tạp")
+    reasoning: str = Field(description="Lý do phân tách câu hỏi")
 
 def create_decomposition_chain(llm: BaseChatModel):
     """Tạo chain để phân tách câu hỏi phức tạp thành các câu hỏi con."""
@@ -70,14 +61,34 @@ def create_decomposition_chain(llm: BaseChatModel):
         - Các câu hỏi con phải có thứ tự logic
         - Đảm bảo câu hỏi con bao phủ toàn bộ câu hỏi gốc
         - Sử dụng mã cổ phiếu cụ thể nếu có
+        - Nếu có thể dùng 1 công cụ cho nhiều công ty (như danh sách), hãy gộp lại
         
         Ví dụ:
         Câu hỏi: "So sánh hiệu suất VIC và VHM trong 3 tháng qua"
         Phân tách thành:
-        1. "Xem dữ liệu OHLCV của VIC trong 3 tháng qua"
-        2. "Xem dữ liệu OHLCV của VHM trong 3 tháng qua"
-        3. "Tính RSI của VIC"
-        4. "Tính RSI của VHM"
+        1. "Tính SMA của VIC, VHM trong 3 tháng qua"
+        2. "Tính RSI của VIC, VHM trong 3 tháng qua"
+        Lý do: Câu hỏi yêu cầu tính toán 2 chỉ số khác nhau, cần phân tách để giải quyết.
+        
+        Câu hỏi: "Danh sách cổ đông lớn của VCB và TCB"
+        Không phân tách câu hỏi
+        Lý do: Công cụ cho phép tính toán trên nhiều mã cổ phiếu, không cần phân tách.
+        
+        Câu hỏi: "So sánh khối lượng giao dịch của VIC với HPG trong 2 tuần gần đây"
+        Không phân tách câu hỏi
+        Lý do: Công cụ cho phép tính toán trên nhiều mã cổ phiếu, không cần phân tách.
+
+        Câu hỏi: "Danh sách ban lãnh đạo đang làm việc của VCB và Các công ty con thuộc VCB"
+        Phân tách thành:
+        1. "Danh sách ban lãnh đạo đang làm việc của VCB"
+        2. "Danh sách các công ty con thuộc VCB"
+        Lý do: Câu hỏi yêu cầu sử dụng 2 công cụ khác nhau, cần phân tách để giải quyết.
+        
+        Câu hỏi: "Tính cho tôi SMA9 và SMA20 của mã VIC trong 2 tháng với timeframe 1d"
+        Phân tách thành:
+        1. "Tính SMA9 của VIC trong 2 tháng với timeframe 1d"
+        2. "Tính SMA20 của VIC trong 2 tháng với timeframe 1d"
+        Lý do: Câu hỏi yêu cầu tính toán 1 chỉ số 2 lần với config khác nhau, cần phân tách để giải quyết.
         
         {format_instructions}"""),
         ("human", "Phân tách câu hỏi sau: {query}")
@@ -93,6 +104,16 @@ def create_decomposition_chain(llm: BaseChatModel):
     
     return decomposition_chain
 
+def decompose_complex_query(query, llm: BaseChatModel):
+    """Phân tách câu hỏi phức tạp thành các câu hỏi con."""
+    decomposition_chain = create_decomposition_chain(llm)
+    result = decomposition_chain.invoke({"query": query})
+    return result.sub_queries
+
+#==========Combine result==========
+class CombinedResult(BaseModel):
+    combined_answer: str = Field(description="Câu trả lời tổng hợp từ nhiều kết quả con")
+    original_query: str = Field(description="Câu hỏi gốc")
 
 def create_combine_chain(llm: BaseChatModel):
     """Tạo chain để kết hợp nhiều kết quả thành một câu trả lời tổng hợp."""
@@ -130,11 +151,3 @@ def create_combine_chain(llm: BaseChatModel):
     combine_chain = combine_prompt | llm | parser
     
     return combine_chain
-
-
-def decompose_complex_query(query: str, llm: BaseChatModel) -> list[str]:
-    """Phân tách câu hỏi phức tạp thành các câu hỏi con."""
-    decomposition_chain = create_decomposition_chain(llm)
-    result = decomposition_chain.invoke({"query": query})
-    return result.sub_queries
-

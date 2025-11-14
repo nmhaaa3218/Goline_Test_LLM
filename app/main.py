@@ -1,160 +1,136 @@
-from fastapi import FastAPI
+from .agent import create_finance_agent
+from .chains import create_classifier_chain, create_combine_chain, decompose_complex_query
+from langchain_google_genai import ChatGoogleGenerativeAI
+from .config import Config
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from dotenv import load_dotenv
-import os
+import json
+import pandas as pd
 
-load_dotenv()
-os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
-
-# Import agent creation functions and chains
-from .agent import create_agent_executor, create_direct_agent_executor, create_llm
-from .chains import create_classifier_chain, create_decomposition_chain, create_combine_chain
-
-# --- Define Models for Request and Response ---
-
-class ChatRequest(BaseModel):
-    """Request body for /chat endpoint."""
-    input: str
-
-class ChatResponse(BaseModel):
-    """Response body for /chat endpoint."""
-    output: str
-
-
-# --- Initialize Application and Agents ---
-
-app = FastAPI(
-    title="VnStock LangChain Agent",
-    description="An API for financial chatbot using LangChain and vnstock",
-    version="1.0.0"
+# Load LLM
+llm = ChatGoogleGenerativeAI(
+    model=Config.MODEL_NAME,
+    temperature=Config.TEMPERATURE,
+    top_k=Config.TOP_K,
+    top_p=Config.TOP_P
 )
 
-# Initialize agents and chains ONCE when server starts
-llm = create_llm()
-agent = create_agent_executor()
-agent_direct = create_direct_agent_executor()
+# Create agent
+agent = create_finance_agent(llm)
+
+# Create classifier chain
 classifier_chain = create_classifier_chain(llm)
-decomposition_chain = create_decomposition_chain(llm)
+
+# Create combine chain
 combine_chain = create_combine_chain(llm)
 
-# --- Define API Endpoints ---
+app = FastAPI(title="Finance Agent API", description="API for financial analysis and stock market queries")
 
-@app.get("/", tags=["Status"])
-async def read_root():
-    """Basic endpoint to check if server is running."""
-    return {"status": "ok", "message": "Welcome to the VnStock Agent API!"}
+class QueryRequest(BaseModel):
+    query: str
 
+class QueryResponse(BaseModel):
+    answer: str
+    is_complex: bool
+    reasoning: str = None
 
-@app.post("/chat", response_model=ChatResponse, tags=["Chat"])
-async def chat_with_agent(request: ChatRequest):
-    """
-    Main endpoint to chat with agent.
-    Implements the workflow from experiment.ipynb exactly:
-    1. Classify query as simple or complex
-    2. If simple: use regular agent (no history maintained)
-    3. If complex: decompose -> use direct agents -> combine results
-    
-    Each query is independent - no chat history is maintained.
-    """
-    query = request.input
-    
-    # Step 1: Classify the query (matching notebook: classifier_chain.invoke)
-    classification_result = await classifier_chain.ainvoke({"query": query})
-    
-    if classification_result.is_complex:
-        # Complex query workflow: decompose -> execute sub-queries -> combine
-        # Step 2: Decompose complex query into sub-queries (matching notebook)
-        decomposition_result = await decomposition_chain.ainvoke({"query": query})
-        decomposed_queries = decomposition_result.sub_queries
+@app.post("/query", response_model=QueryResponse)
+async def process_query(request: QueryRequest):
+    """Process a financial query and return the answer."""
+    try:
+        query = request.query
         
-        # Step 3: Execute each sub-query using direct agent (matching notebook exactly)
-        # Each invocation is independent - no history passed
-        results = []
-        for sub_query in decomposed_queries:
-            agent_result = await agent_direct.ainvoke({
-                "messages": [{"role": "user", "content": sub_query}]
+        # Classify the query
+        classification_result = classifier_chain.invoke({"query": query})
+        
+        print(f"Classification result is complex: {classification_result.is_complex}")
+        print(f"Classification result reasoning: {classification_result.reasoning}")
+        
+        if classification_result.is_complex:
+            # Decompose complex query
+            decomposed_queries = decompose_complex_query(query, llm)
+            
+            # Process each decomposed query with agent
+            results = []
+            for sub_query in decomposed_queries:
+                agent_result = agent.invoke({"messages": [{"role": "user", "content": sub_query}]})
+                results.append(agent_result)
+            
+            # Format results into string
+            formatted_results = ""
+            for i, result in enumerate(results, 1):
+                formatted_results += f"Kết quả {i}:\n{result.get('output', str(result))}\n\n"
+            
+            # Combine results using the chain
+            combined_result = combine_chain.invoke({
+                "original_query": query,
+                "results": formatted_results
             })
-            results.append(agent_result)
-        
-        # Step 4: Format results for combination (matching notebook exactly)
-        formatted_results = ""
-        for i, result in enumerate(results, 1):
-            # Extract output matching notebook: result.get('output', str(result))
-            # Add error handling for different response structures
-            try:
-                if isinstance(result, dict):
-                    output = result.get('output', str(result))
-                else:
-                    output = str(result)
-            except Exception as e:
-                output = f"Error extracting result {i}: {str(e)}"
             
-            # Ensure output is a string
-            if not isinstance(output, str):
-                output = str(output)
+            return QueryResponse(
+                answer=combined_result.combined_answer,
+                is_complex=True,
+                reasoning=classification_result.reasoning
+            )
+        
+        else:
+            # Process simple query directly
+            result = agent.invoke({"messages": [{"role": "user", "content": query}]})
             
-            formatted_results += f"Kết quả {i}:\n{output}\n\n"
-        
-        # Step 5: Combine results using combine chain (matching notebook)
-        combined_result = await combine_chain.ainvoke({
-            "original_query": query,
-            "results": formatted_results
-        })
-        
-        # Return combined answer
-        # Ensure combined_answer is a string
-        combined_output = combined_result.combined_answer
-        if not isinstance(combined_output, str):
-            combined_output = str(combined_output)
-        
-        return ChatResponse(
-            output=combined_output
-        )
-    else:
-        # Simple query: use regular agent (matching notebook exactly)
-        # Each query is independent - no history passed or maintained
-        result = await agent.ainvoke({
-            "messages": [{"role": "user", "content": query}]
-        })
-        
-        # Extract output matching notebook: result['messages'][-1].content
-        # The content can be a list with dict containing 'text' field (for AIMessage)
-        # Add error handling for different response structures
-        try:
-            if 'messages' in result and len(result['messages']) > 0:
-                last_message = result['messages'][-1]
-                
-                # Get content from message object or dict
-                if hasattr(last_message, 'content'):
-                    content = last_message.content
-                elif isinstance(last_message, dict) and 'content' in last_message:
-                    content = last_message['content']
-                else:
-                    content = str(last_message)
-                
-                # Handle content that is a list (AIMessage format)
-                if isinstance(content, list) and len(content) > 0:
-                    # Check if it's a dict with 'text' field
-                    if isinstance(content[0], dict) and 'text' in content[0]:
-                        output = content[0]['text']
-                    else:
-                        output = str(content[0])
-                elif isinstance(content, str):
-                    output = content
-                else:
-                    output = str(content)
-            elif 'output' in result:
-                output = result['output']
+            # Handle different response formats
+            if 'structured_response' in result:
+                # Case 1: return_direct=False - formatted response
+                print(f"Case 1: return_direct=False")
+                answer = result['structured_response'].content
             else:
-                output = str(result)
-        except (KeyError, IndexError, AttributeError) as e:
-            # Fallback if structure is unexpected
-            output = f"Error extracting response: {str(e)}. Result structure: {type(result)}"
-        
-        # Ensure output is a string
-        if not isinstance(output, str):
-            output = str(output)
-        
-        return ChatResponse(
-            output=output
-        )
+                # Case 2: return_direct=True - raw tool data
+                try:
+                    print(f"Case 2: return_direct=True")
+                    outer = json.loads(result['messages'][-1].content)
+                    all_rows = []
+
+                    for symbol, inner_json_str in outer.items():
+                        records = json.loads(inner_json_str)
+                        for r in records:
+                            r["symbol"] = symbol
+                        all_rows.extend(records)
+
+                    df = pd.DataFrame(all_rows)
+                    df["time"] = pd.to_datetime(df["time"], unit="ms")
+                    
+                    # Convert DataFrame to readable format
+                    answer = df.to_string(index=False)
+                except:
+                    # Fallback to string representation
+                    print(f"Fallback to string representation")
+                    answer = str(result.get('output', result))
+            
+            return QueryResponse(
+                answer=answer,
+                is_complex=False,
+                reasoning=classification_result.reasoning
+            )
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+
+@app.get("/")
+async def root():
+    """Root endpoint with API information."""
+    return {
+        "message": "Finance Agent API",
+        "description": "API for financial analysis and stock market queries",
+        "endpoints": {
+            "/query": "POST - Process financial queries",
+            "/docs": "GET - API documentation"
+        }
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
